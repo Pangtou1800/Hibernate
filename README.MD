@@ -69,9 +69,13 @@
             - 开发速度慢，不支持纯粹的面向对象操作，需要熟悉SQL语句，
 
               并且熟练使用SQL语句优化功能
+
         
+
         ·TopLink
+
         
+
         ·OJB
 
 ## 第二节 Hello Hibernate
@@ -338,3 +342,273 @@
                 - 2 ：READ COMMITTED
                 - 4 : REPEATABLE READ
                 - 8 ：SERIALIZABLE
+
+    4.3 持久化对象的状态转换
+
+        ·临时对象（Transient）
+
+            - 在使用代理主键的情况下，OID通常为null
+            - 不处在Session的缓存中
+            - 在数据库中没有对应的记录
+
+        
+
+        ·持久化对象/托管（Persist）
+
+            - OID不为null
+            - 位于Session缓存中
+            - 和数据库中相关的记录对应
+            - Session在flush缓存时，会根据持久化对象的属性变化来同步更新数据库
+            - 在同一个Session实例的缓存中，数据库表中的每条记录只对应唯一的持久化对象
+
+        ·删除对象（Removed）
+
+            - 在数据库中没有和其OID对应的记录
+            - 不再处于Session缓存中
+            - 一般情况下，应用程序不应该继续使用该对象
+
+        
+
+        ·游离对象/脱管（Detached）
+
+            - OID不为null
+            - 不再处于Session缓存中
+            - 一般情况下，游离对象是从持久化对象转变来的，因此数据库中可能还存在对应的记录
+
+        Object ----- new -----> 临时状态 --------------------------------------
+          |                     |                                             |
+        get()                   save()                                        |
+        load()                  saveOrUpdate()                                |
+        Query.list()            persist()                                     |
+        Query.uniqueResult()    merge()                                       |
+        Query.iterator()        |                                             |
+        Query.scroll()          |                                             |
+          |                     v                                             v
+          -------------------> 持久化状态 ------ delete() -----> 删除状态 -- 垃圾回收
+                                |   ^                               ^         ^
+                                |   |                               |         |
+                            evict() update()                       delete()   |
+                            close() saveOrUpdate()                  |         |
+                            clear() merge()                         |         |
+                                |   |                               |         |
+                                v   |                               |         |
+                                游离状态 ---------------------------------------
+
+    4.4 save()和persist()方法
+
+        ·save()
+
+            1. 使一个临时对象变为持久化对象
+            2. 为对象分配ID
+            3. 在flush缓存时会发送一条insert语句
+            4. 在save方法之前设置id是无效的
+            5. 持久化对象的id是不能被修改的
+
+            
+
+        ·persist()
+
+            1. persist()基本和save()方法一样
+            2. 在persist()方法调用之前若对象已经有id，则不会执行insert，而会抛出异常
+
+    4.5 get()和load()
+
+        ·get() vs load()
+
+            1. get()方法会立即加载对象，
+
+               load()方法若不使用该对象，则不会立即执行查询操作，而返回一个代理对象
+               - get()是立即检索，load()是延迟检索
+
+            2. load()可能会抛LazyInitializationException
+
+                （在需要取得代理对象时已经关闭了session）
+
+            3. 若表中没有对应记录，get()返回null
+
+                在Session没有关闭的前提下使用对象时，load()抛出异常
+
+    4.6 update()
+
+        1. 若更新一个持久化对象，不需要显式调用update()方法
+
+            因为在调用Transaction.commit()时会先执行session.flush()
+
+        2. 若要更新一个游离对象，需要显式调用session.update()方法
+
+            同时会把游离对象变成持久化对象
+
+        3. 游离对象调用update()时，无论对象和数据表的记录是否一致，都会发送SQL语句
+
+            - 避免update()盲目触发SQL:
+
+                在.hbm.xml的class节点中设置select-before-update=true即可
+                ※但是会使正常执行更新时发送额外的SQL
+
+        4. 若数据库中没有对应记录而调用了update()方法，则会抛出异常
+
+        5. 游离对象调用update()时，若session缓存中已经有了OID相同的持久化对象则抛出异常
+
+    4.7 saveOrUpdate()
+
+        1. 以对象的OID是否为null来判断执行哪个方法
+
+                null -> save()
+                not null -> update()
+
+        2. 若OID不为空，则会抛出异常
+
+        3. OID值等于id的unsaved-value属性值对象，也被认为是一个临时对象
+
+    4.8 merge()
+
+        -> 在JPA里详细解说
+
+    4.9 delete()
+
+        1. 只要OID不为空就可以进行删除 ※游离对象也OK
+
+        2. 可以通过配置.cfg.xml的属性，使delete()过后对象UID置空
+
+            hibernate.use_identifier_rollback -> true
+
+    4.10 evict()
+
+        从session缓存中删除某个持久化对象
+
+    4.11 doWork()
+
+        实装org.hibernate.jdbc.Work接口来获取jdbc driver的原装Connetion对象
+
+## 第五节 Hibernate配置文件 追加配置1
+
+    5.1 C3P0数据库连接池
+
+        步骤：
+
+            1. 导入jar包
+
+                hibernate安装包\optional\c3p0\*.jar
+
+            2. 加入配置
+                - hibernate.c3p0.max_size 连接池最大连接数
+                - hibernate.c3p0.min_size 连接池最小连接数
+                - hibernate.c3p0.acquire_increment 连接耗尽时，一次性获取多少新连接
+                - hibernate.c3p0.timeout 连接池中连接多久未使用后被销毁
+                - hibernate.c3p0.idle_test_period 多久检测一次池内连接是否超时
+                - hibernate.c3p0.max_statements 缓存Statement对象的数量
+
+    5.2 一次性读取的记录条数
+
+        hibernate.jdbc.fetch_size
+
+        100
+
+    5.3 批量操作时的批次大小
+
+        hibernate.jdbc.batch_size
+
+        30
+          
+
+## 第六节 对象关系映射文件
+
+    6.1 映射文件说明
+
+        - 类层次 class
+
+            ·主键 id
+            ·基本类型 property
+            ·实体引用类 many-to-one | one-to-one
+            ·集合 set | list | map | array
+
+                - one-to-many
+                - many-to-many
+
+            ·子类 subclass | joined-subclass
+            ·其他 component | any ...
+
+        - 查询语句 query
+
+    6.2 hibernate-mapping元素
+
+        - package 可选包名
+        - schema
+        - catalog
+        - default-cascade
+        - default-access
+        - default-lazy
+        - auto-import
+
+    6.3 class元素
+
+        - name 类名
+        - table 表名，默认值是类名
+        - dynamic-insert 发行的SQL仅包含值不为null的项目
+        - dynamic-update 发行的SQL仅包含值变更的项目
+        - select-before-update
+        - batch-size
+        - lazy
+        - mutable
+        - discriminator-value
+
+    6.4 id元素
+
+        - name OID属性名
+        - type Hibernate映射类型
+        - column 列名（主键字段名）
+        - generator
+            - class 标识符生成器类名（缩写名也可）
+        - unsaved-value 指定临时对象OID
+
+    6.5 各种generator
+
+        - increment 
+
+            Hibernate以递增方式为代理主键赋值，存在并发问题故不宜用于生产环境
+            ※OID必须为long, int, short
+
+        - identity 
+
+            由数据库来自动生成
+            ※要求底层数据库把主键字段设为自增，且OID必须为long, int, short
+
+        - sequence
+
+            由数据库生成的序列来生成
+            ※要求底层数据库支持序列，且OID必须为long, int, short
+
+        - hilo
+
+            由Hibernate按照高低算法生成标识符（会自动在数据库中建一个用于生成主键的表）
+            ※不依赖与底层数据库，但是OID必须为long, int, short
+
+        - seqhilo
+        - native
+
+            根据底层数据库的支持能力自动选择identity，sequence或hilo来生成标识符
+            ※OID必须为long, int, short
+
+        - uuid.hex
+        - uuid.string
+        - assigned
+        - foreign
+
+    6.6 property元素
+
+        - name 属性名
+        - type 映射类型
+
+            ·指定java类型，则根据java类型选择对应的Hibernate类型
+            ·指定Hibernate类型，则采用
+
+        - column 列名
+        - not-null 非空约束
+        - access 访问策略，getter+setter or 反射访问属性
+        - unique 唯一约束
+        - index 创建索引
+        - length 长度
+        - scale 小数位数
+        - formula SQL表达式，用于计算派生属性的值
+
+    // Maybe someday later...
